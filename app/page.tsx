@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // Connection details from your Supabase screenshot
 const SB_URL = "https://wdmfllqafitmeqbtzlpe.supabase.co";
-const SB_KEY = "sb_publishable_6D5Ct0PRaioMF_REPLACE_WITH_FULL_KEY"; 
+const SB_KEY = "sb_publishable_6D5Ct0PRaioMF..."; // <--- PASTE YOUR FULL KEY HERE
 const supabase = createClient(SB_URL, SB_KEY);
 
 export default function BattleRoom({ params }: { params: { room: string } }) {
@@ -45,7 +45,7 @@ export default function BattleRoom({ params }: { params: { room: string } }) {
 
   if (!battle) return (
     <div className="bg-black text-white p-20 text-center min-h-screen">
-      <p>Connecting to Arena {ROOM_ID}...</p>
+      <p>Arena "{ROOM_ID}" is Offline.</p>
       <input type="password" placeholder="PIN" onChange={(e) => e.target.value === "8888" && setIsHost(true)} className="bg-transparent mt-4 border-b border-zinc-800 text-center outline-none" />
       {isHost && (
         <button onClick={async () => {
@@ -58,8 +58,8 @@ export default function BattleRoom({ params }: { params: { room: string } }) {
 
   return (
     <main className="min-h-screen bg-black text-white p-6 font-sans flex flex-col items-center">
-      <h1 className="text-red-600 font-black text-4xl mb-4 italic uppercase tracking-tighter">Global Live</h1>
-      <div className="text-7xl font-mono bg-zinc-900 p-4 rounded-3xl mb-10 border border-zinc-800 shadow-2xl">
+      <h1 className="text-red-600 font-black text-4xl mb-4 italic uppercase">Global Live</h1>
+      <div className="text-7xl font-mono bg-zinc-900 p-4 rounded-3xl mb-10 border border-zinc-800">
         {Math.floor(timeLeft/60)}:{(timeLeft%60).toString().padStart(2,'0')}
       </div>
 
@@ -68,7 +68,7 @@ export default function BattleRoom({ params }: { params: { room: string } }) {
           <div key={p.id} className="bg-zinc-900 p-6 rounded-[35px] border border-zinc-800">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-black uppercase italic">{p.name}</h2>
-              <span className="text-4xl font-bold text-yellow-500 tabular-nums">{p.v}</span>
+              <span className="text-4xl font-bold text-yellow-500">{p.v}</span>
             </div>
             <button onClick={() => vote(p.id as 'a'|'b')} disabled={timeLeft <= 0} className={`w-full py-5 rounded-2xl font-black text-xl transition-all active:scale-95 ${timeLeft > 0 ? 'bg-red-600' : 'bg-zinc-800 text-zinc-600'}`}>
               VOTE {p.id.toUpperCase()}
