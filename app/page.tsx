@@ -1,263 +1,433 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-type VoteSide = "A" | "B";
+type VoteState = {
+  a: number;
+  b: number;
+  endsAt: number; // epoch ms
+  durationSec: number;
+  nameA: string;
+  nameB: string;
+  hostUnlocked: boolean;
+};
 
-export default function Page() {
-  // Edit these for each battle:
-  const EVENT_TITLE = "GHOSTHAVN LIVEVOTE";
-  const SUBTITLE = "Live 1v1 rap battle voting";
-  const POWERED = "Powered by Ghosthavn";
+const STORAGE_KEY = "ghosthavn_livevote_v2";
+const DEFAULT_DURATION = 10 * 60; // 10 minutes
 
-  // Change these names anytime:
-  const [rapperA, setRapperA] = useState("Rapper A");
-  const [rapperB, setRapperB] = useState("Rapper B");
+export default function Home() {
+  const [pinInput, setPinInput] = useState("");
+  const [hostPin, setHostPin] = useState("1122"); // CHANGE PIN HERE
 
-  // Voting state (local, per-device)
-  const [votesA, setVotesA] = useState(0);
-  const [votesB, setVotesB] = useState(0);
+  const [cooldownUntil, setCooldownUntil] = useState(0);
 
-  // Anti-spam: one vote per device every X seconds
-  const COOLDOWN_SECONDS = 10;
-  const [cooldownUntil, setCooldownUntil] = useState<number>(0);
+  const [state, setState] = useState<VoteState>({
+    a: 0,
+    b: 0,
+    durationSec: DEFAULT_DURATION,
+    endsAt: Date.now() + DEFAULT_DURATION * 1000,
+    nameA: "Rapper A",
+    nameB: "Rapper B",
+    hostUnlocked: false,
+  });
 
-  // Optional: battle timer lock
-  const BATTLE_MINUTES = 10;
-  const [startTs, setStartTs] = useState<number>(() => Date.now());
-  const endTs = useMemo(() => startTs + BATTLE_MINUTES * 60 * 1000, [startTs]);
-  const [now, setNow] = useState(Date.now());
-
-  const locked = now >= endTs;
-
-  // Load from localStorage so refresh doesn't reset
+  // Load from localStorage
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("ghosthavn_livevote_state_v1");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed.votesA === "number") setVotesA(parsed.votesA);
-        if (typeof parsed.votesB === "number") setVotesB(parsed.votesB);
-        if (typeof parsed.cooldownUntil === "number") setCooldownUntil(parsed.cooldownUntil);
-        if (typeof parsed.startTs === "number") setStartTs(parsed.startTs);
-        if (typeof parsed.rapperA === "string") setRapperA(parsed.rapperA);
-        if (typeof parsed.rapperB === "string") setRapperB(parsed.rapperB);
-      }
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<VoteState> & { hostPin?: string };
+      setState((s) => ({
+        ...s,
+        ...parsed,
+        hostUnlocked: false, // always start locked on reload for safety
+        durationSec: parsed.durationSec ?? s.durationSec,
+        endsAt: parsed.endsAt ?? s.endsAt,
+        nameA: parsed.nameA ?? s.nameA,
+        nameB: parsed.nameB ?? s.nameB,
+        a: parsed.a ?? s.a,
+        b: parsed.b ?? s.b,
+      }));
+      if (parsed.hostPin) setHostPin(parsed.hostPin);
     } catch {}
   }, []);
 
+  // Save to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(
-        "ghosthavn_livevote_state_v1",
-        JSON.stringify({ votesA, votesB, cooldownUntil, startTs, rapperA, rapperB })
+        STORAGE_KEY,
+        JSON.stringify({
+          ...state,
+          hostPin,
+        })
       );
     } catch {}
-  }, [votesA, votesB, cooldownUntil, startTs, rapperA, rapperB]);
+  }, [state, hostPin]);
 
-  // Tick timer
+  // Countdown ticker
+  const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
 
-  const total = votesA + votesB;
-  const pctA = total === 0 ? 50 : Math.round((votesA / total) * 100);
-  const pctB = 100 - pctA;
-
-  const secondsLeft = Math.max(0, Math.floor((endTs - now) / 1000));
+  const secondsLeft = Math.max(0, Math.ceil((state.endsAt - now) / 1000));
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
 
-  const canVote = !locked && now >= cooldownUntil;
+  const total = state.a + state.b;
+  const pctA = total === 0 ? 50 : Math.round((state.a / total) * 100);
+  const pctB = 100 - pctA;
 
-  function vote(side: VoteSide) {
+  const canVote = Date.now() >= cooldownUntil;
+  const host = state.hostUnlocked;
+
+  function vote(which: "a" | "b") {
     if (!canVote) return;
-
-    if (side === "A") setVotesA((v) => v + 1);
-    if (side === "B") setVotesB((v) => v + 1);
-
-    setCooldownUntil(Date.now() + COOLDOWN_SECONDS * 1000);
+    setState((s) => ({
+      ...s,
+      a: which === "a" ? s.a + 1 : s.a,
+      b: which === "b" ? s.b + 1 : s.b,
+    }));
+    // 3s cooldown per device
+    setCooldownUntil(Date.now() + 3000);
   }
 
-  function resetBattle() {
-    if (!confirm("Reset battle? This clears votes on THIS device only.")) return;
-    setVotesA(0);
-    setVotesB(0);
-    setCooldownUntil(0);
-    setStartTs(Date.now());
+  function restartTimer() {
+    setState((s) => ({
+      ...s,
+      endsAt: Date.now() + s.durationSec * 1000,
+    }));
+  }
+
+  function resetVotesThisDevice() {
+    setState((s) => ({ ...s, a: 0, b: 0 }));
+  }
+
+  function unlockHost() {
+    if (pinInput.trim() === hostPin.trim()) {
+      setState((s) => ({ ...s, hostUnlocked: true }));
+      setPinInput("");
+    } else {
+      alert("Wrong PIN");
+    }
+  }
+
+  function lockHost() {
+    setState((s) => ({ ...s, hostUnlocked: false }));
   }
 
   return (
-    <main style={{ minHeight: "100vh", background: "#0b0b0f", color: "white" }}>
-      <div
-        style={{
-          maxWidth: 720,
-          margin: "0 auto",
-          padding: "28px 16px 40px",
-          fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+    <main className="wrap">
+      <div className="container">
+        {/* Header */}
+        <div className="top">
           <div>
-            <h1 style={{ margin: 0, fontSize: 28, letterSpacing: 1 }}>{EVENT_TITLE}</h1>
-            <div style={{ opacity: 0.8, marginTop: 6 }}>{SUBTITLE}</div>
-            <div style={{ opacity: 0.55, marginTop: 6 }}>{POWERED}</div>
+            <div className="title">
+              GHOSTHAVN
+              <br />
+              LIVEVOTE
+            </div>
+            <div className="sub">
+              Live 1v1 rap battle voting
+              <br />
+              Powered by Ghosthavn
+            </div>
           </div>
 
-          <div
-            style={{
-              padding: "10px 12px",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 12,
-              background: "rgba(255,255,255,0.04)",
-              textAlign: "right",
-              minWidth: 118,
-            }}
-          >
-            <div style={{ fontSize: 12, opacity: 0.7 }}>{locked ? "VOTING CLOSED" : "TIME LEFT"}</div>
-            <div style={{ fontSize: 18, marginTop: 2, fontWeight: 700 }}>{mm}:{ss}</div>
+          <div className="timerCard">
+            <div className="timerLabel">TIME LEFT</div>
+            <div className="timerValue">
+              {mm}:{ss}
+            </div>
           </div>
         </div>
 
-        {/* Editable names */}
-        <div
-          style={{
-            marginTop: 18,
-            padding: 14,
-            borderRadius: 16,
-            border: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(255,255,255,0.04)",
-          }}
-        >
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Rapper A name</div>
+        {/* Host PIN */}
+        <div className="card">
+          {!host ? (
+            <div className="row">
+              <div className="badge">Host controls</div>
               <input
-                value={rapperA}
-                onChange={(e) => setRapperA(e.target.value)}
-                style={inputStyle}
+                className="input"
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value)}
+                placeholder="Enter host PIN"
               />
+              <button className="btn" onClick={unlockHost}>
+                Unlock
+              </button>
+              <div className="muted small">
+                Names + admin buttons stay locked for everyone until host unlocks.
+              </div>
             </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Rapper B name</div>
-              <input
-                value={rapperB}
-                onChange={(e) => setRapperB(e.target.value)}
-                style={inputStyle}
-              />
-            </div>
-          </div>
-
-          <div style={{ fontSize: 12, opacity: 0.55, marginTop: 10 }}>
-            Tip: Change names here before the battle starts (this saves on your device).
-          </div>
-        </div>
-
-        {/* Scoreboard */}
-        <div style={{ marginTop: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, opacity: 0.85 }}>
-            <div>
-              <div style={{ fontSize: 14 }}>{rapperA}</div>
-              <div style={{ fontSize: 24, fontWeight: 800 }}>{votesA}</div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 14 }}>{rapperB}</div>
-              <div style={{ fontSize: 24, fontWeight: 800 }}>{votesB}</div>
-            </div>
-          </div>
-
-          <div style={{ height: 14, borderRadius: 999, background: "rgba(255,255,255,0.10)", overflow: "hidden" }}>
-            <div style={{ width: `${pctA}%`, height: "100%", background: "rgba(255,255,255,0.85)" }} />
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-            <div>{pctA}%</div>
-            <div>{pctB}%</div>
-          </div>
-        </div>
-
-        {/* Vote buttons */}
-        <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <button
-            onClick={() => vote("A")}
-            disabled={!canVote}
-            style={{
-              ...btnStyle,
-              opacity: canVote ? 1 : 0.45,
-            }}
-          >
-            🗳️ Vote {rapperA}
-          </button>
-
-          <button
-            onClick={() => vote("B")}
-            disabled={!canVote}
-            style={{
-              ...btnStyle,
-              opacity: canVote ? 1 : 0.45,
-            }}
-          >
-            🗳️ Vote {rapperB}
-          </button>
-        </div>
-
-        {/* Cooldown + status */}
-        <div style={{ marginTop: 12, fontSize: 13, opacity: 0.75 }}>
-          {locked ? (
-            <div>Voting is closed for this battle.</div>
-          ) : canVote ? (
-            <div>Tap a button to vote. One vote every {COOLDOWN_SECONDS}s per device.</div>
           ) : (
-            <div>Hold up… cooldown active. Try again in a few seconds.</div>
+            <div className="row">
+              <div className="badge ok">HOST UNLOCKED</div>
+              <button className="btn" onClick={lockHost}>
+                Lock
+              </button>
+              <div className="spacer" />
+              <button className="btn" onClick={restartTimer}>
+                Restart Timer
+              </button>
+              <button className="btn" onClick={resetVotesThisDevice}>
+                Reset Votes (This Device)
+              </button>
+            </div>
           )}
         </div>
 
-        {/* Admin-ish controls (local only) */}
-        <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={() => setStartTs(Date.now())} style={smallBtn}>
-            Restart Timer
+        {/* Names (FIXED sizing / no overlap) */}
+        <div className="card">
+          <div className="names">
+            <div>
+              <div className="label">Rapper A name</div>
+              <input
+                className="input"
+                value={state.nameA}
+                readOnly={!host}
+                onChange={(e) => setState((s) => ({ ...s, nameA: e.target.value }))}
+              />
+            </div>
+            <div>
+              <div className="label">Rapper B name</div>
+              <input
+                className="input"
+                value={state.nameB}
+                readOnly={!host}
+                onChange={(e) => setState((s) => ({ ...s, nameB: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          {!host && (
+            <div className="muted small" style={{ marginTop: 10 }}>
+              Names are locked. Only the host PIN can edit them.
+            </div>
+          )}
+        </div>
+
+        {/* Score */}
+        <div className="scoreRow">
+          <div>
+            <div className="scoreName">{state.nameA}</div>
+            <div className="scoreNum">{state.a}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div className="scoreName">{state.nameB}</div>
+            <div className="scoreNum">{state.b}</div>
+          </div>
+        </div>
+
+        {/* Bar */}
+        <div className="bar">
+          <div className="barFill" style={{ width: `${pctA}%` }} />
+        </div>
+        <div className="barLabels">
+          <div>{pctA}%</div>
+          <div>{pctB}%</div>
+        </div>
+
+        {/* Vote buttons */}
+        <div className="voteRow">
+          <button className={`voteBtn ${canVote ? "" : "disabled"}`} onClick={() => vote("a")}>
+            Vote {state.nameA}
           </button>
-          <button onClick={resetBattle} style={smallBtn}>
-            Reset Votes (This Device)
+          <button className={`voteBtn ${canVote ? "" : "disabled"}`} onClick={() => vote("b")}>
+            Vote {state.nameB}
           </button>
         </div>
 
-        <div style={{ marginTop: 18, fontSize: 12, opacity: 0.55, lineHeight: 1.45 }}>
-          Note: This version stores votes on the viewer’s device (localStorage). If you want real global live voting
-          across all phones at an event, next we’ll add a free database (Supabase) so every vote updates live for everyone.
+        {!canVote && <div className="muted">Cooldown… try again in a moment.</div>}
+
+        <div className="muted small" style={{ marginTop: 10 }}>
+          Note: This version stores votes on each device (localStorage). For real shared live voting across all phones, we’ll add Supabase.
         </div>
       </div>
+
+      {/* CSS */}
+      <style jsx>{`
+        .wrap {
+          min-height: 100vh;
+          padding: 16px;
+          background: radial-gradient(900px 600px at 10% 0%, rgba(120, 120, 255, 0.12), transparent 60%),
+            radial-gradient(900px 500px at 90% 20%, rgba(255, 120, 180, 0.1), transparent 55%),
+            #07070b;
+          color: #fff;
+          font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        }
+        .container {
+          max-width: 780px;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .top {
+          display: flex;
+          gap: 12px;
+          justify-content: space-between;
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .title {
+          font-size: 44px;
+          font-weight: 900;
+          letter-spacing: 1px;
+          line-height: 0.95;
+        }
+        .sub {
+          opacity: 0.8;
+          margin-top: 10px;
+          font-size: 16px;
+        }
+        .timerCard {
+          padding: 12px 14px;
+          border-radius: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.04);
+          min-width: 170px;
+          text-align: right;
+        }
+        .timerLabel {
+          font-size: 12px;
+          opacity: 0.75;
+        }
+        .timerValue {
+          font-size: 34px;
+          font-weight: 900;
+        }
+        .card {
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.04);
+          border-radius: 16px;
+          padding: 14px;
+        }
+        .row {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .spacer {
+          flex: 1;
+        }
+        .badge {
+          font-weight: 800;
+          font-size: 13px;
+          padding: 6px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: rgba(0, 0, 0, 0.25);
+        }
+        .badge.ok {
+          color: #b6ffcc;
+        }
+        .label {
+          font-size: 13px;
+          opacity: 0.75;
+          margin-bottom: 6px;
+        }
+        .input {
+          width: 100%;
+          padding: 12px 12px;
+          border-radius: 14px;
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          background: rgba(0, 0, 0, 0.25);
+          color: #fff;
+          outline: none;
+          min-width: 180px;
+        }
+        .btn {
+          padding: 12px 14px;
+          border-radius: 14px;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          background: rgba(255, 255, 255, 0.06);
+          color: #fff;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .muted {
+          opacity: 0.75;
+        }
+        .small {
+          font-size: 13px;
+        }
+
+        /* THIS fixes the overlap: on mobile it becomes stacked */
+        .names {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        @media (max-width: 560px) {
+          .names {
+            grid-template-columns: 1fr;
+          }
+          .title {
+            font-size: 38px;
+          }
+        }
+
+        .scoreRow {
+          display: flex;
+          justify-content: space-between;
+          padding: 0 6px;
+          margin-top: 2px;
+        }
+        .scoreName {
+          font-size: 16px;
+          opacity: 0.85;
+        }
+        .scoreNum {
+          font-size: 52px;
+          font-weight: 900;
+          line-height: 1;
+        }
+        .bar {
+          height: 12px;
+          border-radius: 999px;
+          background: rgba(255, 255, 255, 0.1);
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .barFill {
+          height: 100%;
+          background: rgba(255, 255, 255, 0.85);
+        }
+        .barLabels {
+          display: flex;
+          justify-content: space-between;
+          opacity: 0.75;
+          margin-top: 6px;
+        }
+        .voteRow {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        @media (max-width: 560px) {
+          .voteRow {
+            grid-template-columns: 1fr;
+          }
+        }
+        .voteBtn {
+          padding: 16px 14px;
+          border-radius: 18px;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          background: rgba(255, 255, 255, 0.06);
+          color: #fff;
+          font-size: 18px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+        .voteBtn.disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      `}</style>
     </main>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(0,0,0,0.25)",
-  color: "white",
-  outline: "none",
-};
-
-const btnStyle: React.CSSProperties = {
-  padding: "14px 14px",
-  borderRadius: 14,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.08)",
-  color: "white",
-  fontSize: 16,
-  fontWeight: 700,
-};
-
-const smallBtn: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.06)",
-  color: "white",
-  fontSize: 13,
-  fontWeight: 700,
-};
