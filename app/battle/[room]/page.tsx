@@ -1,95 +1,95 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { supabase } from '../client'; 
+import { createClient } from '@supabase/supabase-js';
 
-export default function BattleRoom({ params }: { params: { room: string } }) {
+// Credentials from your Supabase screenshot
+const SB_URL = "https://wdmfllqafitmeqbtzlpe.supabase.co";
+const SB_KEY = "sb_publishable_6D5Ct0PRaioMF..."; // Use the full key from your screenshot
+const supabase = createClient(SB_URL, SB_KEY);
+const ROOM_ID = "main-stage"; 
+
+export default function BattleRoom() {
   const [battle, setBattle] = useState<any>(null);
   const [timeLeft, setTimeLeft] = useState(0);
   const [isHost, setIsHost] = useState(false);
-  const ROOM_ID = params.room;
-  const ADMIN_PIN = "8888"; 
+  const [mounted, setMounted] = useState(false);
 
-  // 1. THE GLOBAL PIPE (Shared Truth)
+  useEffect(() => { setMounted(true); }, []);
+
   useEffect(() => {
-    const fetchAndSubscribe = async () => {
-      // Get current data from Supabase
+    if (!mounted) return;
+    const sync = async () => {
       const { data } = await supabase.from('battles').select('*').eq('room', ROOM_ID).single();
       if (data) setBattle(data);
 
-      // Listen for the Admin to start the round or for votes to come in
-      supabase.channel(`room-${ROOM_ID}`)
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'battles', filter: `room=eq.${ROOM_ID}` }, 
-        (payload) => setBattle(payload.new))
-        .subscribe();
+      supabase.channel('arena').on('postgres_changes', 
+        { event: 'UPDATE', schema: 'public', table: 'battles' }, 
+        (p) => setBattle(p.new)
+      ).subscribe();
     };
+    sync();
+  }, [mounted]);
 
-    fetchAndSubscribe();
-  }, [ROOM_ID]);
-
-  // 2. THE SYNCED TIMER
   useEffect(() => {
     const timer = setInterval(() => {
       if (battle?.ends_at) {
-        const remaining = Math.max(0, Math.floor((new Date(battle.ends_at).getTime() - Date.now()) / 1000));
-        setTimeLeft(remaining);
+        const diff = Math.max(0, Math.floor((new Date(battle.ends_at).getTime() - Date.now()) / 1000));
+        setTimeLeft(diff);
       }
     }, 1000);
     return () => clearInterval(timer);
   }, [battle]);
 
-  // 3. ATOMIC VOTE (Updates the DB, which then updates everyone else)
-  const castVote = async (p: 'a' | 'b') => {
-    if (timeLeft <= 0) return; 
-    await supabase.rpc('increment_vote', { room_id: ROOM_ID, player_column: p });
+  const vote = async (col: 'a' | 'b') => {
+    if (timeLeft > 0) await supabase.rpc('increment_vote', { room_id: ROOM_ID, player_column: col });
   };
 
-  if (!battle) return <div className="p-20 text-white text-center font-bold">CONNECTING TO ARENA: {ROOM_ID}...</div>;
+  if (!mounted) return null;
+  if (!battle) return (
+    <div className="bg-black text-white p-20 text-center min-h-screen">
+      <p className="mb-4">Connecting to Global Arena...</p>
+      <p className="text-xs text-zinc-500">If this hangs, enter PIN 8888 below to start the room.</p>
+      <div className="mt-10">
+        <input type="password" placeholder="Admin PIN" onChange={(e) => e.target.value === "8888" && setIsHost(true)} className="bg-transparent text-center border-b border-zinc-800 outline-none" />
+        {isHost && (
+          <button onClick={async () => {
+            const end = new Date(Date.now() + 120000).toISOString();
+            await supabase.from('battles').upsert({ room: ROOM_ID, votes_a:0, votes_b:0, ends_at:end, rapper_a:"Rapper A", rapper_b:"Rapper B" });
+          }} className="block w-full bg-blue-600 py-3 mt-4 rounded-xl font-bold">START GLOBAL SESSION</button>
+        )}
+      </div>
+    </div>
+  );
 
   return (
-    <main className="min-h-screen bg-black text-white p-6 font-sans max-w-md mx-auto">
-      <div className="text-center mb-10">
-        <h1 className="text-4xl font-black italic text-red-600 uppercase tracking-tighter">GLOBAL LIVE ARENA</h1>
-        <div className="text-7xl font-mono font-bold mt-4 bg-zinc-900 rounded-3xl py-4 border border-zinc-800">
-          {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
-        </div>
+    <main className="min-h-screen bg-black text-white p-6 font-sans flex flex-col items-center">
+      <h1 className="text-red-600 font-black text-4xl mb-4 italic uppercase tracking-tighter">Global Live</h1>
+      <div className="text-7xl font-mono bg-zinc-900 p-4 rounded-3xl mb-10 border border-zinc-800">
+        {Math.floor(timeLeft/60)}:{(timeLeft%60).toString().padStart(2,'0')}
       </div>
 
-      <div className="space-y-6">
-        {[ { id: 'a', name: battle.rapper_a, v: battle.votes_a }, 
-           { id: 'b', name: battle.rapper_b, v: battle.votes_b } ].map((p) => (
-          <div key={p.id} className="bg-zinc-900 border-2 border-zinc-800 rounded-[35px] p-8">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-black uppercase italic">{p.name}</h2>
-              <span className="text-5xl font-black text-yellow-500">{p.v}</span>
+      <div className="w-full max-w-md space-y-4">
+        {[ {id:'a', name:battle.rapper_a, v:battle.votes_a}, {id:'b', name:battle.rapper_b, v:battle.votes_b} ].map((p) => (
+          <div key={p.id} className="bg-zinc-900 p-6 rounded-[35px] border border-zinc-800">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-black uppercase italic tracking-tight">{p.name}</h2>
+              <span className="text-4xl font-black text-yellow-500">{p.v}</span>
             </div>
-            <button 
-              onClick={() => castVote(p.id as 'a' | 'b')}
-              disabled={timeLeft <= 0}
-              className={`w-full py-6 rounded-3xl font-black text-2xl active:scale-95 transition-all
-                ${timeLeft > 0 ? 'bg-red-600 shadow-xl' : 'bg-zinc-800 text-zinc-600'}`}
-            >
-              {timeLeft > 0 ? "VOTE NOW" : "LOCKED"}
+            <button onClick={() => vote(p.id as 'a'|'b')} disabled={timeLeft <= 0} className={`w-full py-5 rounded-2xl font-black text-xl transition-all active:scale-95 ${timeLeft > 0 ? 'bg-red-600 shadow-lg' : 'bg-zinc-800 text-zinc-600'}`}>
+              {timeLeft > 0 ? "CAST VOTE" : "LOCKED"}
             </button>
           </div>
         ))}
       </div>
 
-      {/* ADMIN PANEL */}
-      <div className="mt-20 border-t border-zinc-900 pt-10 pb-20">
-        {!isHost ? (
-          <input 
-            type="password" placeholder="Admin PIN" 
-            className="w-full bg-transparent text-center text-zinc-800 outline-none"
-            onChange={(e) => e.target.value === ADMIN_PIN && setIsHost(true)}
-          />
-        ) : (
+      <div className="mt-20 border-t border-zinc-900 pt-10 w-full max-w-md opacity-20 hover:opacity-100 transition-opacity">
+        <input type="password" placeholder="Admin PIN" onChange={(e) => e.target.value === "8888" && setIsHost(true)} className="bg-transparent w-full text-center outline-none" />
+        {isHost && (
           <button onClick={async () => {
-            const end = new Date(Date.now() + 120000).toISOString(); 
-            await supabase.from('battles').update({ votes_a: 0, votes_b: 0, ends_at: end }).eq('room', ROOM_ID);
-          }} className="w-full bg-blue-600 py-5 rounded-2xl font-black uppercase shadow-2xl">
-             START 2-MINUTE BATTLE
-          </button>
+            const end = new Date(Date.now() + 120000).toISOString();
+            await supabase.from('battles').update({ votes_a:0, votes_b:0, ends_at:end }).eq('room', ROOM_ID);
+          }} className="w-full bg-blue-600 py-4 mt-4 rounded-xl font-bold uppercase">Reset & Start Round</button>
         )}
       </div>
     </main>
